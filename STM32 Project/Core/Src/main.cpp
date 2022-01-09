@@ -22,7 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "bno055.h"
+#include "bno055_stm32.h"
+#include "Printer.hpp"
+#include "Motors.hpp"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,6 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define BNO055_I2C_ADDR    BNO055_I2C_ADDR_LO    // For 0x28
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -44,12 +48,14 @@ ADC_HandleTypeDef hadc1;
 
 I2C_HandleTypeDef hi2c1;
 
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-
+uint64_t timerCNT = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,6 +65,8 @@ static void MX_TIM2_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -100,14 +108,135 @@ int main(void)
   MX_ADC1_Init();
   MX_I2C1_Init();
   MX_USART1_UART_Init();
+  MX_TIM1_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
+  bno055_assignI2C(&hi2c1);
+  bno055_setup();
+  bno055_setOperationModeNDOF();
+
+  PRINTER printer = PRINTER(&huart1);
+  MOTORS motors = MOTORS(&htim2);
+
+  HAL_Delay(1000);
+
+  motors.enableMotors();
+  motors.setAllMotorsOFF();
+  HAL_Delay(1000);
+  motors.initMotors();
+  motors.setAllMotorsOFF();
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET);
+  HAL_Delay(2000);
+
+
+
+
+  float KP = 0.3;
+  float KI = 0.04;
+  float KD = 0.005;
+  float pidMAX = 400;
+
+  float targetX = 0;
+  float targetY = 0;
+
+  float integralX = 0;
+  float integralY = 0;
+  float prevErrorX = 0;
+  float prevErrorY = 0;
+
+  float heightThrottle = 0;
+
+  uint64_t prevCNT = 0;
+  uint32_t ticks = HAL_GetTick() + 5;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+
+
+
+	 bno055_vector_t v = bno055_getVectorEuler();
+
+
+	 float errorX = targetX - v.z;
+	 float errorY = targetY - v.y;
+
+
+
+	 integralX += errorX;
+	 integralY += errorY;
+
+	 if(abs(errorX) > 20)
+	 {
+		 integralX = 0;
+	 }
+	 if(abs(errorY) > 20)
+	 {
+		 integralY = 0;
+	 }
+
+	 uint32_t time = HAL_GetTick() - ticks;
+
+	 float pidX = KP * errorX + KI * integralX + KD * (errorX - prevErrorX) / (time / 1000.f);
+	 float pidY = KP * errorY + KI * integralY + KD * (errorY - prevErrorY) / (time / 1000.f);
+
+	 ticks = HAL_GetTick();
+
+	 if(pidX > pidMAX)
+	 {
+		 pidX = pidMAX;
+	 }
+	 if(pidX < -pidMAX)
+	 {
+		 pidX = -pidMAX;
+	 }
+	 if(pidY > pidMAX)
+	 {
+		 pidY = pidMAX;
+	 }
+	 if(pidY < -pidMAX)
+	 {
+		 pidY = -pidMAX;
+	 }
+
+	 prevErrorX = errorX;
+	 prevErrorY = errorY;
+
+
+	 float pwm1 = heightThrottle + pidX - pidY;
+	 float pwm2 = heightThrottle - pidX - pidY;
+	 float pwm3 = heightThrottle - pidX + pidY;
+	 float pwm4 = heightThrottle + pidX + pidY;
+
+	 if(pwm1 < 10)
+	 {
+		 pwm1 = 10;
+	 }
+	 if(pwm2 < 10)
+	 {
+		 pwm2 = 10;
+	 }
+	 if(pwm3 < 10)
+	 {
+		 pwm3 = 10;
+	 }
+	 if(pwm4 < 10)
+	 {
+		 pwm4 = 10;
+	 }
+
+	 //printer.printFloat(time);
+	 //printer.printFloat(errorY);
+
+
+
+	 motors.setAllMotors(pwm1, pwm2, pwm3, pwm4);
+
+	 HAL_Delay(9);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -240,6 +369,52 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 7200-1;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 65536-1;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+
+}
+
+/**
   * @brief TIM2 Initialization Function
   * @param None
   * @retval None
@@ -259,9 +434,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 72-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 65535;
+  htim2.Init.Period = 20000-1;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -274,10 +449,6 @@ static void MX_TIM2_Init(void)
     Error_Handler();
   }
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_OC_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -299,12 +470,10 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  if (HAL_TIM_OC_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -313,6 +482,51 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 7200-1;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 1000-1;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
 
 }
 
@@ -398,6 +612,17 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+void TIM3_IRQHandler()
+{
+
+}
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
+{
+	if(htim == &htim3) {
+	timerCNT++;
+	}
+}
 /* USER CODE END 4 */
 
 /**
