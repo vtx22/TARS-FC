@@ -132,13 +132,14 @@ int main(void)
 
 
 
-  float KP = 0.3;
-  float KI = 0.04;
-  float KD = 0.005;
-  float pidMAX = 400;
+  const float KP = 0.3;
+  const float KI = 0.04;
+  const float KD = 0.005;
+  const float pidMAX = 400;
 
   float targetX = 0;
   float targetY = 0;
+  float targetZ = 0;
 
   float integralX = 0;
   float integralY = 0;
@@ -165,9 +166,10 @@ int main(void)
 	 float errorY = targetY - v.y;
 
 
+	 uint32_t time = HAL_GetTick() - ticks;
 
-	 integralX += errorX;
-	 integralY += errorY;
+	 integralX += errorX * time;
+	 integralY += errorY * time;
 
 	 if(abs(errorX) > 20)
 	 {
@@ -178,7 +180,7 @@ int main(void)
 		 integralY = 0;
 	 }
 
-	 uint32_t time = HAL_GetTick() - ticks;
+
 
 	 float pidX = KP * errorX + KI * integralX + KD * (errorX - prevErrorX) / (time / 1000.f);
 	 float pidY = KP * errorY + KI * integralY + KD * (errorY - prevErrorY) / (time / 1000.f);
